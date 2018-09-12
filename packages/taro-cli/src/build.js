@@ -28,6 +28,9 @@ function build (args, buildConfig) {
     case Util.BUILD_TYPES.UI:
       buildForUILibrary({ watch })
       break
+    case Util.BUILD_TYPES.QUICKAPP:
+      buildForQuickapp({ watch })
+      break
     default:
       console.log(chalk.red('输入类型错误，目前只支持weapp/h5/rn三端类型'))
   }
@@ -49,4 +52,7 @@ function buildForUILibrary ({ watch }) {
   require('./ui').build({ watch })
 }
 
+function buildForQuickapp ({ watch }) {
+  require('./quickapp').build({ watch })
+}
 module.exports = build
