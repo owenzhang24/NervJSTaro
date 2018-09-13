@@ -79,6 +79,19 @@ const DEVICE_RATIO = 'deviceRatio'
 
 const isWindows = os.platform() === 'win32'
 
+const diplayConfigToWeappMap = {
+  navigationBarBackgroundColor: 'titleBarBackgroundColor',
+  navigationBarTextStyle: 'titleBarTextColor',
+  navigationBarTitleText: 'titleBarText',
+  navigationStyle: 'menu',
+  backgroundColor: 'backgroundColor',
+  backgroundTextStyle: null,
+  backgroundColorTop: null,
+  backgroundColorBottom: null,
+  enablePullDownRefresh: null,
+  onReachBottomDistance: null
+}
+
 function getExactedNpmFilePath (npmName, filePath) {
   try {
     const npmInfo = resolveNpmFilesPath(npmName, isProduction, weappNpmConfig)
@@ -905,7 +918,7 @@ async function compileScriptFile (filePath, content) {
   return compileScriptRes.code
 }
 
-function buildProjectConfig () {
+function buildProjectConfig (appConfig = {}) {
   const projectConfigPath = path.join(appPath, 'manifest.json')
   if (!fs.existsSync(projectConfigPath)) {
     return
@@ -913,9 +926,40 @@ function buildProjectConfig () {
   const origProjectConfig = fs.readJSONSync(projectConfigPath)
   fs.writeFileSync(
     path.join(outputDir, 'manifest.json'),
-    JSON.stringify(Object.assign({}, origProjectConfig, { miniprogramRoot: './' }), null, 2)
+    JSON.stringify(Object.assign({}, origProjectConfig, appConfig, { miniprogramRoot: './' }), null, 2)
   )
-  Util.printLog(Util.pocessTypeEnum.GENERATE, '工具配置', `${outputDirName}/manifest.json`)
+  Util.printLog(Util.pocessTypeEnum.GENERATE, '项目配置', `${outputDirName}/manifest.json`)
+}
+
+function routerConfigTransform (pages) {
+  let router = {}
+  if (Array.isArray(pages)) {
+    pages.forEach(page => {
+      const pathArr = page.split('/')
+      let temp = router
+      for (let i = 0; i < pathArr.length - 1; i++) {
+        if (!temp[pathArr[i]]) {
+          temp[pathArr[i]] = i === pathArr.length - 2 ? {component: pathArr[i]} : {}
+        }
+        if (i === 1 && !('entry' in router)) {
+          router['entry'] = pathArr[i]
+        }
+        temp = temp[pathArr[i]]
+      }
+    })
+  }
+  return router
+}
+
+function displayConfigTransform (window) {
+  let display = {}
+  for (const key in window) {
+    const displayKey = diplayConfigToWeappMap[key]
+    if (displayKey) {
+      display[displayKey] = window[key]
+    }
+  }
+  return display
 }
 
 async function buildEntry () {
@@ -948,8 +992,10 @@ async function buildEntry () {
       }
     }
     if (appOutput) {
-      fs.writeFileSync(path.join(outputDir, 'app.json'), JSON.stringify(res.configObj, null, 2))
-      Util.printLog(Util.pocessTypeEnum.GENERATE, '入口配置', `${outputDirName}/app.json`)
+      const { pages, window } = res.configObj
+      const router = routerConfigTransform(pages)
+      const display = displayConfigTransform(window)
+      buildProjectConfig({router, display})
       fs.writeFileSync(path.join(outputDir, 'app.js'), resCode)
       Util.printLog(Util.pocessTypeEnum.GENERATE, '入口文件', `${outputDirName}/app.js`)
     }
@@ -1784,7 +1830,7 @@ function watchFiles () {
 async function build ({ watch }) {
   process.env.TARO_ENV = Util.BUILD_TYPES.QUICKAPP
   isProduction = !watch
-  buildProjectConfig()
+  // buildProjectConfig()
   copyFiles()
   appConfig = await buildEntry()
   await buildPages()
