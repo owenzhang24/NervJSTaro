@@ -975,29 +975,24 @@ async function buildEntry () {
     })
     // app.js的template忽略
     const res = parseAst(PARSE_AST_TYPE.ENTRY, transformResult.ast, [], entryFilePath, outputEntryFilePath)
+    console.log(res, 'res')
     let resCode = res.code
     resCode = await compileScriptFile(entryFilePath, resCode)
     resCode = Util.replaceContentEnv(resCode, projectConfig.env || {})
     resCode = Util.replaceContentConstants(resCode, projectConfig.defineConstants || {})
-    if (isProduction) {
-      const uglifyPluginConfig = pluginsConfig.uglify || { enable: true }
-      if (uglifyPluginConfig.enable) {
-        const uglifyConfig = Object.assign(defaultUglifyConfig, uglifyPluginConfig.config || {})
-        const uglifyResult = npmProcess.callPluginSync('uglifyjs', resCode, entryFilePath, uglifyConfig)
-        if (uglifyResult.error) {
-          console.log(uglifyResult.error)
-        } else {
-          resCode = uglifyResult.code
-        }
-      }
-    }
+
     if (appOutput) {
       const { pages, window } = res.configObj
       const router = routerConfigTransform(pages)
       const display = displayConfigTransform(window)
       buildProjectConfig({router, display})
-      fs.writeFileSync(path.join(outputDir, 'app.js'), resCode)
-      Util.printLog(Util.pocessTypeEnum.GENERATE, '入口文件', `${outputDirName}/app.js`)
+      const UXContent = `
+        <script>
+          ${resCode}
+        </script>
+      `
+      fs.writeFileSync(path.join(outputDir, 'app.ux'), UXContent)
+      Util.printLog(Util.pocessTypeEnum.GENERATE, '公共资源', `${outputDirName}/app.ux`)
     }
     const fileDep = dependencyTree[entryFilePath] || {}
     // 编译依赖的脚本文件
@@ -1006,8 +1001,8 @@ async function buildEntry () {
     }
     // 编译样式文件
     if (Util.isDifferentArray(fileDep['style'], res.styleFiles) && appOutput) {
-      await compileDepStyles(path.join(outputDir, 'app.wxss'), res.styleFiles, false)
-      Util.printLog(Util.pocessTypeEnum.GENERATE, '入口样式', `${outputDirName}/app.wxss`)
+      await compileDepStyles(path.join(outputDir, 'app.css'), res.styleFiles, false)
+      Util.printLog(Util.pocessTypeEnum.GENERATE, '入口样式', `${outputDirName}/app.css`)
     }
     // 拷贝依赖文件
     if (Util.isDifferentArray(fileDep['json'], res.jsonFiles)) {
@@ -1104,9 +1099,11 @@ async function buildSinglePage (page) {
   const pageJsContent = fs.readFileSync(pageJs).toString()
   const outputPageJSPath = pageJs.replace(sourceDir, outputDir).replace(path.extname(pageJs), '.js')
   const outputPagePath = path.dirname(outputPageJSPath)
+  const outputPageUXPath = outputPageJSPath.replace(path.extname(outputPageJSPath), '.ux')
   const outputPageJSONPath = outputPageJSPath.replace(path.extname(outputPageJSPath), '.json')
   const outputPageWXMLPath = outputPageJSPath.replace(path.extname(outputPageJSPath), '.wxml')
   const outputPageWXSSPath = outputPageJSPath.replace(path.extname(outputPageJSPath), '.wxss')
+  const outputPageCSSPath = outputPageJSPath.replace(path.extname(outputPageJSPath), '.css')
   // 判断是不是小程序原生代码页面
   const pageWXMLPath = pageJs.replace(path.extname(pageJs), '.wxml')
   if (fs.existsSync(pageWXMLPath) && pageJsContent.indexOf(taroJsFramework) < 0) {
@@ -1201,22 +1198,28 @@ async function buildSinglePage (page) {
         }
       })
     }
-    fs.writeFileSync(outputPageJSONPath, JSON.stringify(_.merge({}, buildUsingComponents(pageDepComponents), res.configObj), null, 2))
-    Util.printLog(Util.pocessTypeEnum.GENERATE, '页面JSON', `${outputDirName}/${page}.json`)
-    fs.writeFileSync(outputPageJSPath, resCode)
-    Util.printLog(Util.pocessTypeEnum.GENERATE, '页面JS', `${outputDirName}/${page}.js`)
-    fs.writeFileSync(outputPageWXMLPath, transformResult.template)
-    Util.printLog(Util.pocessTypeEnum.GENERATE, '页面WXML', `${outputDirName}/${page}.wxml`)
+    const stylePath = path.relative(path.dirname(outputPageUXPath), outputPageCSSPath)
+    const UXContent = `<template>
+      ${transformResult.template}
+    </template>
+    <style src="./${stylePath}"></style>
+    <script>
+      ${resCode}
+    </script>
+    `
+    fs.writeFileSync(outputPageUXPath, UXContent)
+    Util.printLog(Util.pocessTypeEnum.GENERATE, '页面ux文件', `${outputDirName}/${page}.ux`)
+
     // 编译依赖的脚本文件
     if (Util.isDifferentArray(fileDep['script'], res.scriptFiles)) {
       compileDepScripts(res.scriptFiles)
     }
     // 编译样式文件
     if (Util.isDifferentArray(fileDep['style'], res.styleFiles) || Util.isDifferentArray(depComponents[pageJs], pageDepComponents)) {
-      Util.printLog(Util.pocessTypeEnum.GENERATE, '页面WXSS', `${outputDirName}/${page}.wxss`)
-      const depStyleList = getDepStyleList(outputPageWXSSPath, buildDepComponentsResult)
-      wxssDepTree[outputPageWXSSPath] = depStyleList
-      await compileDepStyles(outputPageWXSSPath, res.styleFiles, false)
+      Util.printLog(Util.pocessTypeEnum.GENERATE, '页面CSS', `${outputDirName}/${page}.css`)
+      const depStyleList = getDepStyleList(outputPageCSSPath, buildDepComponentsResult)
+      wxssDepTree[outputPageCSSPath] = depStyleList
+      await compileDepStyles(outputPageCSSPath, res.styleFiles, false)
     }
     // 拷贝依赖文件
     if (Util.isDifferentArray(fileDep['json'], res.jsonFiles)) {
@@ -1398,8 +1401,10 @@ async function buildSingleComponent (componentObj, buildConfig = {}) {
   Util.printLog(Util.pocessTypeEnum.COMPILE, '组件文件', componentShowPath)
   const componentContent = fs.readFileSync(component).toString()
   const outputComponentJSPath = component.replace(sourceDirPath, buildConfig.outputDir || buildOutputDir).replace(path.extname(component), '.js')
+  const outputComponentUXPath = outputComponentJSPath.replace(path.extname(outputComponentJSPath), '.ux')
   const outputComponentWXMLPath = outputComponentJSPath.replace(path.extname(outputComponentJSPath), '.wxml')
   const outputComponentWXSSPath = outputComponentJSPath.replace(path.extname(outputComponentJSPath), '.wxss')
+  const outputComponentCSSPath = outputComponentJSPath.replace(path.extname(outputComponentJSPath), '.css')
   const outputComponentJSONPath = outputComponentJSPath.replace(path.extname(outputComponentJSPath), '.json')
   if (hasBeenBuiltComponents.indexOf(component) < 0) {
     hasBeenBuiltComponents.push(component)
@@ -1446,18 +1451,7 @@ async function buildSingleComponent (componentObj, buildConfig = {}) {
     resCode = Util.replaceContentEnv(resCode, projectConfig.env || {})
     resCode = Util.replaceContentConstants(resCode, projectConfig.defineConstants || {})
     fs.ensureDirSync(path.dirname(outputComponentJSPath))
-    if (isProduction) {
-      const uglifyPluginConfig = pluginsConfig.uglify || { enable: true }
-      if (uglifyPluginConfig.enable) {
-        const uglifyConfig = Object.assign(defaultUglifyConfig, uglifyPluginConfig.config || {})
-        const uglifyResult = npmProcess.callPluginSync('uglifyjs', resCode, outputComponentJSPath, uglifyConfig)
-        if (uglifyResult.error) {
-          console.log(uglifyResult.error)
-        } else {
-          resCode = uglifyResult.code
-        }
-      }
-    }
+
     const { usingComponents = {} } = res.configObj
     if (usingComponents && !Util.isEmptyObject(usingComponents)) {
       const keys = Object.keys(usingComponents)
@@ -1511,20 +1505,26 @@ async function buildSingleComponent (componentObj, buildConfig = {}) {
     }
     fs.writeFileSync(outputComponentJSONPath, JSON.stringify(_.merge({}, buildUsingComponents(componentDepComponents, true), res.configObj), null, 2))
     Util.printLog(Util.pocessTypeEnum.GENERATE, '组件JSON', `${outputDirName}/${outputComponentShowPath}.json`)
-    fs.writeFileSync(outputComponentJSPath, resCode)
-    Util.printLog(Util.pocessTypeEnum.GENERATE, '组件JS', `${outputDirName}/${outputComponentShowPath}.js`)
-    fs.writeFileSync(outputComponentWXMLPath, transformResult.template)
-    Util.printLog(Util.pocessTypeEnum.GENERATE, '组件WXML', `${outputDirName}/${outputComponentShowPath}.wxml`)
+    const UXContent = `
+      <template>
+        ${transformResult.template}
+      </template>
+      <script>
+        ${resCode}
+      </script>
+    `
+    fs.writeFileSync(outputComponentUXPath, UXContent)
+    Util.printLog(Util.pocessTypeEnum.GENERATE, '组件ux文件', `${outputDirName}/${outputComponentShowPath}.ux`)
     // 编译依赖的脚本文件
     if (Util.isDifferentArray(fileDep['script'], res.scriptFiles)) {
       compileDepScripts(res.scriptFiles)
     }
     // 编译样式文件
     if (Util.isDifferentArray(fileDep['style'], res.styleFiles) || Util.isDifferentArray(depComponents[component], componentDepComponents)) {
-      Util.printLog(Util.pocessTypeEnum.GENERATE, '组件WXSS', `${outputDirName}/${outputComponentShowPath}.wxss`)
-      const depStyleList = getDepStyleList(outputComponentWXSSPath, buildDepComponentsResult)
-      wxssDepTree[outputComponentWXSSPath] = depStyleList
-      await compileDepStyles(outputComponentWXSSPath, res.styleFiles, true)
+      Util.printLog(Util.pocessTypeEnum.GENERATE, '组件CSS', `${outputDirName}/${outputComponentShowPath}.css`)
+      const depStyleList = getDepStyleList(outputComponentCSSPath, buildDepComponentsResult)
+      wxssDepTree[outputComponentCSSPath] = depStyleList
+      await compileDepStyles(outputComponentCSSPath, res.styleFiles, true)
     }
     // 拷贝依赖文件
     if (Util.isDifferentArray(fileDep['json'], res.jsonFiles)) {
@@ -1591,18 +1591,6 @@ function compileDepScripts (scriptFiles) {
           fs.ensureDirSync(path.dirname(outputItem))
           resCode = Util.replaceContentEnv(resCode, projectConfig.env || {})
           resCode = Util.replaceContentConstants(resCode, projectConfig.defineConstants || {})
-          if (isProduction) {
-            const uglifyPluginConfig = pluginsConfig.uglify || { enable: true }
-            if (uglifyPluginConfig.enable) {
-              const uglifyConfig = Object.assign(defaultUglifyConfig, uglifyPluginConfig.config || {})
-              const uglifyResult = npmProcess.callPluginSync('uglifyjs', resCode, item, uglifyConfig)
-              if (uglifyResult.error) {
-                console.log(uglifyResult.error)
-              } else {
-                resCode = uglifyResult.code
-              }
-            }
-          }
           fs.writeFileSync(outputItem, resCode)
           let modifyOutput = outputItem.replace(appPath + path.sep, '')
           modifyOutput = modifyOutput.split(path.sep).join('/')
@@ -1830,7 +1818,6 @@ function watchFiles () {
 async function build ({ watch }) {
   process.env.TARO_ENV = Util.BUILD_TYPES.QUICKAPP
   isProduction = !watch
-  // buildProjectConfig()
   copyFiles()
   appConfig = await buildEntry()
   await buildPages()
