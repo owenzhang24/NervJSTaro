@@ -1,10 +1,11 @@
 import traverse, { Binding, NodePath } from 'babel-traverse'
 import generate from 'babel-generator'
+import * as fs from 'fs'
 import { Transformer } from './class'
 import { prettyPrint } from 'html'
 import { setting, findFirstIdentifierFromMemberExpression, isContainJSXElement, codeFrameError } from './utils'
 import * as t from 'babel-types'
-import { DEFAULT_Component_SET, INTERNAL_SAFE_GET, TARO_PACKAGE_NAME, ASYNC_PACKAGE_NAME, REDUX_PACKAGE_NAME, INTERNAL_DYNAMIC, IMAGE_COMPONENTS, INTERNAL_INLINE_STYLE, THIRD_PARTY_COMPONENTS } from './constant'
+import { DEFAULT_Component_SET, INTERNAL_SAFE_GET, TARO_PACKAGE_NAME, ASYNC_PACKAGE_NAME, REDUX_PACKAGE_NAME, IMAGE_COMPONENTS, INTERNAL_INLINE_STYLE, THIRD_PARTY_COMPONENTS, INTERNAL_GET_ORIGNAL } from './constant'
 import { transform as parse } from 'babel-core'
 import * as ts from 'typescript'
 const template = require('babel-template')
@@ -135,7 +136,8 @@ export interface Result {
     name: string,
     path: string,
     type: string
-  }[]
+  }[],
+  componentProperies: string[]
 }
 
 interface TransformResult extends Result {
@@ -174,7 +176,14 @@ export default function transform (options: Options): TransformResult {
         'dynamicImport'
       ] as any[]
     },
-    plugins: [[require('babel-plugin-danger-remove-unused-import'), { ignore: ['@tarojs/taro', 'react', 'nervjs'] }]]
+    plugins: [
+      require('babel-plugin-transform-flow-strip-types'),
+      [require('babel-plugin-danger-remove-unused-import'), { ignore: ['@tarojs/taro', 'react', 'nervjs'] }],
+      require('babel-plugin-transform-es2015-template-literals'),
+      [require('babel-plugin-transform-define').default, {
+        'process.env.TARO_ENV': 'weapp'
+      }]
+    ].concat((process.env.NODE_ENV === 'test') ? [] : require('babel-plugin-remove-dead-code').default)
   }).ast as t.File
   if (options.isNormal) {
     return { ast } as any
@@ -183,12 +192,37 @@ export default function transform (options: Options): TransformResult {
   let result
   const componentSourceMap = new Map<string, string[]>()
   const imageSource = new Set<string>()
+  let componentProperies: string[] = []
   let mainClass!: NodePath<t.ClassDeclaration>
   let storeName!: string
   let renderMethod!: NodePath<t.ClassMethod>
   traverse(ast, {
     ClassDeclaration (path) {
       mainClass = path
+      const superClass = path.node.superClass
+      if (t.isIdentifier(superClass)) {
+        const binding = path.scope.getBinding(superClass.name)
+        if (binding && binding.kind === 'module') {
+          const bindingPath = binding.path.parentPath
+          if (bindingPath.isImportDeclaration()) {
+            const source = bindingPath.node.source
+            try {
+              const p = fs.existsSync(source.value + '.js') ? source.value + '.js' : source.value + '.tsx'
+              const code = fs.readFileSync(p, 'utf8')
+              componentProperies = transform({
+                isRoot: false,
+                isApp: false,
+                code,
+                isTyped: true,
+                sourcePath: source.value,
+                outputPath: source.value
+              }).componentProperies
+            } catch (error) {
+              //
+            }
+          }
+        }
+      }
     },
     ClassExpression (path) {
       mainClass = path as any
@@ -196,6 +230,16 @@ export default function transform (options: Options): TransformResult {
     ClassMethod (path) {
       if (t.isIdentifier(path.node.key) && path.node.key.name === 'render') {
         renderMethod = path
+      }
+    },
+    IfStatement (path) {
+      const consequent = path.get('consequent')
+      if (!consequent.isBlockStatement()) {
+        consequent.replaceWith(
+          t.blockStatement([
+            consequent.node as any
+          ])
+        )
       }
     },
     CallExpression (path) {
@@ -342,7 +386,7 @@ export default function transform (options: Options): TransformResult {
       if (source === TARO_PACKAGE_NAME) {
         path.node.specifiers.push(
           t.importSpecifier(t.identifier(INTERNAL_SAFE_GET), t.identifier(INTERNAL_SAFE_GET)),
-          t.importSpecifier(t.identifier(INTERNAL_DYNAMIC), t.identifier(INTERNAL_DYNAMIC)),
+          t.importSpecifier(t.identifier(INTERNAL_GET_ORIGNAL), t.identifier(INTERNAL_GET_ORIGNAL)),
           t.importSpecifier(t.identifier(INTERNAL_INLINE_STYLE), t.identifier(INTERNAL_INLINE_STYLE))
         )
       }
@@ -402,7 +446,7 @@ export default function transform (options: Options): TransformResult {
     )
     return { ast } as TransformResult
   }
-  result = new Transformer(mainClass, options.sourcePath).result
+  result = new Transformer(mainClass, options.sourcePath, componentProperies).result
   result.code = generate(ast).code
   result.ast = ast
   result.template = prettyPrint(result.template)

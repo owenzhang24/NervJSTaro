@@ -17,7 +17,8 @@ import {
   generateAnonymousState,
   hasComplexExpression,
   findMethodName,
-  isVarName
+  isVarName,
+  setParentCondition
 } from './utils'
 import { difference } from 'lodash'
 import {
@@ -25,7 +26,7 @@ import {
   buildBlockElement,
   parseJSXElement
 } from './jsx'
-import { DEFAULT_Component_SET, MAP_CALL_ITERATOR, LOOP_STATE, LOOP_CALLEE, THIRD_PARTY_COMPONENTS } from './constant'
+import { DEFAULT_Component_SET, MAP_CALL_ITERATOR, LOOP_STATE, LOOP_CALLEE, THIRD_PARTY_COMPONENTS, LOOP_ORIGINAL, INTERNAL_GET_ORIGNAL } from './constant'
 import generate from 'babel-generator'
 const template = require('babel-template')
 
@@ -95,6 +96,7 @@ export class RenderParser {
   private topLevelIfStatement = new Set<NodePath<t.IfStatement>>()
   private usedEvents = new Set<string>()
   private customComponentNames: Set<string>
+  private originalCallee = new Map<t.Expression, t.JSXElement>()
 
   private renderPath: NodePath<t.ClassMethod>
   private methods: ClassMethodsMap
@@ -316,6 +318,8 @@ export class RenderParser {
                     }
                   }
                   setJSXAttr(jsxElementPath.node, 'wx:for', t.jSXExpressionContainer(ary))
+                  this.originalCallee.set(ary, jsxElementPath.node)
+
                   const [func] = callExpr.node.arguments
                   if (
                     t.isFunctionExpression(func) ||
@@ -393,11 +397,20 @@ export class RenderParser {
                 VariableDeclarator: (p) => {
                   const { id, init } = p.node
                   if (t.isIdentifier(id)) {
-                    const newId = this.renderScope.generateDeclaredUidIdentifier('$' + id.name)
-                    blockStatement.scope.rename(id.name, newId.name)
-                    p.parentPath.replaceWith(
-                      template('ID = INIT;')({ ID: newId, INIT: init })
-                    )
+                    if (id.name.startsWith('loopArray')) {
+                      this.renderPath.node.body.body.unshift(
+                        t.variableDeclaration('let', [t.variableDeclarator(t.identifier(id.name))])
+                      )
+                      p.parentPath.replaceWith(
+                        template('ID = INIT;')({ ID: t.identifier(id.name), INIT: init })
+                      )
+                    } else {
+                      const newId = this.renderScope.generateDeclaredUidIdentifier('$' + id.name)
+                      this.renderScope.rename(id.name, newId.name)
+                      p.parentPath.replaceWith(
+                        template('ID = INIT;')({ ID: newId, INIT: init })
+                      )
+                    }
                   }
                 }
               })
@@ -592,24 +605,24 @@ export class RenderParser {
           if (t.isJSXExpressionContainer(value)) {
             const methodName = findMethodName(value.expression)
             methodName && this.usedEvents.add(methodName)
+            const method = this.methods.get(methodName)
+            // if (method && t.isIdentifier(method.node.key)) {
+            //   this.usedEvents.add(methodName)
+            // } else if (method === null) {
+            //   this.usedEvents.add(methodName)
+            // }
+            if (!generate(value.expression).code.includes('.bind')) {
+              path.node.value = t.stringLiteral(`${methodName}`)
+            }
             if (this.methods.has(methodName)) {
-              const method = this.methods.get(methodName)
-              // if (method && t.isIdentifier(method.node.key)) {
-              //   this.usedEvents.add(methodName)
-              // } else if (method === null) {
-              //   this.usedEvents.add(methodName)
-              // }
-              if (!generate(value.expression).code.includes('.bind')) {
-                path.node.value = t.stringLiteral(`${methodName}`)
-              }
               eventShouldBeCatched = isContainStopPropagation(method)
-              const componentName = jsxElementPath.node.openingElement.name
-              if (t.isJSXIdentifier(componentName) && !DEFAULT_Component_SET.has(componentName.name)) {
-                const element = path.parent as t.JSXOpeningElement
-                if (process.env.NODE_ENV !== 'test') {
-                  const fnName = `__fn_${name.name}`
-                  element.attributes = element.attributes.concat([t.jSXAttribute(t.jSXIdentifier(fnName))])
-                }
+            }
+            const componentName = jsxElementPath.node.openingElement.name
+            if (t.isJSXIdentifier(componentName) && !DEFAULT_Component_SET.has(componentName.name)) {
+              const element = path.parent as t.JSXOpeningElement
+              if (process.env.NODE_ENV !== 'test') {
+                const fnName = `__fn_${name.name}`
+                element.attributes = element.attributes.concat([t.jSXAttribute(t.jSXIdentifier(fnName))])
               }
             }
           }
@@ -715,6 +728,23 @@ export class RenderParser {
         parent.remove()
       }
     },
+    NullLiteral (path) {
+      const statementParent = path.getStatementParent()
+      if (statementParent && statementParent.isReturnStatement() && !t.isBinaryExpression(path.parent) && !isChildrenOfJSXAttr(path)) {
+        path.replaceWith(
+          t.jSXElement(
+            t.jSXOpeningElement(
+              t.jSXIdentifier('View'),
+              []
+            ),
+            undefined,
+            [],
+            true
+          )
+        )
+      }
+    },
+
     ...this.jsxElementVisitor,
     JSXExpressionContainer: (path) => {
       // todo
@@ -848,9 +878,33 @@ export class RenderParser {
           }
           stateToBeAssign.forEach(s => this.loopRefIdentifiers.set(s, callee))
           const properties = Array.from(stateToBeAssign).map(state => t.objectProperty(t.identifier(state), t.identifier(state)))
+          // tslint:disable-next-line:no-inner-declarations
+          function replaceOriginal (path, parent, name) {
+            if (
+              path.isReferencedIdentifier() &&
+              name === item.name &&
+              !(t.isMemberExpression(parent) && t.isIdentifier(parent.property, { name: LOOP_ORIGINAL })) &&
+              !(t.isMemberExpression(parent) && t.isIdentifier(parent.property) && (parent.property.name.startsWith(LOOP_STATE) || parent.property.name.startsWith(LOOP_CALLEE)))
+            ) {
+              path.replaceWith(t.memberExpression(
+                t.identifier(item.name),
+                t.identifier(LOOP_ORIGINAL)
+              ))
+              hasOriginalRef = true
+            }
+          }
+          const bodyPath = (callee.get('arguments') as any)[0].get('body')
+          bodyPath.traverse({
+            Identifier (path) {
+              const name = path.node.name
+              const parent = path.parent
+              replaceOriginal(path, parent, name)
+            }
+          })
           component.traverse({
             Identifier (path) {
               const name = path.node.name
+              const parent = path.parent
               if (stateToBeAssign.has(name) && path.isReferencedIdentifier()) {
                 path.replaceWith(
                   t.memberExpression(
@@ -858,19 +912,10 @@ export class RenderParser {
                     path.node
                   )
                 )
-              }
-
-              if (
-                path.parentPath.isJSXExpressionContainer() &&
-                path.isReferencedIdentifier() &&
-                name === item.name
-              ) {
-                path.replaceWith(t.memberExpression(
-                  t.identifier(item.name),
-                  t.identifier('$$original')
-                ))
                 hasOriginalRef = true
               }
+
+              replaceOriginal(path, parent, name)
             },
             MemberExpression (path) {
               const id = findFirstIdentifierFromMemberExpression(path.node)
@@ -880,14 +925,24 @@ export class RenderParser {
             }
           })
           if (hasOriginalRef) {
-            properties.push(t.objectProperty(
-              t.identifier('$$original'),
-              t.identifier(item.name)
-            ))
+            const originalProp = t.objectProperty(
+              t.identifier(LOOP_ORIGINAL),
+              t.memberExpression(
+                t.identifier(item.name),
+                t.identifier(LOOP_ORIGINAL)
+              )
+            )
+            properties.push(originalProp)
+            body.unshift(
+              t.expressionStatement(t.assignmentExpression('=', t.identifier(item.name), t.objectExpression([
+                t.objectProperty(
+                  t.identifier(LOOP_ORIGINAL),
+                  t.callExpression(t.identifier(INTERNAL_GET_ORIGNAL), [t.identifier(item.name)])
+                )
+              ])))
+            )
           }
-          const returnStatement = t.returnStatement(t.objectExpression(
-            [t.spreadProperty(t.identifier(item.name)), ...properties]
-          ))
+          const returnStatement = t.returnStatement(properties.length ? t.objectExpression(properties) : item)
           const parentCallee = callee.findParent(c => isArrayMapCallExpression(c))
           if (isArrayMapCallExpression(parentCallee)) {
             const [ func ] = parentCallee.node.arguments
@@ -936,11 +991,35 @@ export class RenderParser {
             this.addRefIdentifier(callee, t.identifier(stateName))
             // this.referencedIdentifiers.add(t.identifier(stateName))
             setJSXAttr(component.node, 'wx:for', t.jSXExpressionContainer(t.identifier(stateName)))
-            this.renderPath.node.body.body.push(
-              buildConstVariableDeclaration(stateName, callee.node)
-            )
+            const decl = buildConstVariableDeclaration(stateName, setParentCondition(component, callee.node, true))
+            let inserted = false
+            const returnBody = this.renderPath.node.body.body
+            for (let index = 0; index < returnBody.length; index++) {
+              const node = returnBody[index]
+              const statement = callee.getStatementParent().node
+              if (node === statement) {
+                returnBody.splice(index, 0, decl)
+                inserted = true
+                break
+              }
+              if (t.isIfStatement(node)) {
+                const block = node.consequent
+                if (t.isBlockStatement(block)) {
+                  for (let ii = 0; ii < block.body.length; ii++) {
+                    const st = block.body[ii]
+                    if (st === statement) {
+                      block.body.splice(ii, 0, decl)
+                      inserted = true
+                      break
+                    }
+                  }
+                }
+              }
+            }
+            if (!inserted) {
+              returnBody.push(decl)
+            }
           }
-          // console.log(callee.getSource())
         }
       }
       replaceQueue.push(() => {
@@ -961,7 +1040,29 @@ export class RenderParser {
 
   removeJSXStatement () {
     this.jsxDeclarations.forEach(d => d && d.remove())
-    this.returnedPaths.forEach(p => p.remove())
+    this.returnedPaths.forEach((p: NodePath<t.ReturnStatement>) => {
+      const ifStem = p.findParent(_ => _.isIfStatement())
+      if (ifStem) {
+        const node = p.node
+        if (t.isJSXElement(node.argument)) {
+          const jsx = node.argument
+          if (jsx.children.length === 0 && jsx.openingElement.attributes.length === 0) {
+            node.argument = t.nullLiteral()
+          } else {
+            p.remove()
+          }
+        } else {
+          const isValid = p.get('argument').evaluateTruthy()
+          if (!isValid) {
+            node.argument = t.nullLiteral()
+          } else {
+            p.remove()
+          }
+        }
+      } else {
+        p.remove()
+      }
+    })
   }
 
   setReserveWord = (word: string) => {
