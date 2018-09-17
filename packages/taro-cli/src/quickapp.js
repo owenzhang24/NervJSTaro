@@ -21,7 +21,6 @@ const npmProcess = require('./util/npm')
 const { resolveNpmFilesPath, resolveNpmPkgMainPath } = require('./util/resolve_npm_files')
 const babylonConfig = require('./config/babylon')
 const browserList = require('./config/browser_list')
-const defaultUglifyConfig = require('./config/uglify')
 const defaultBabelConfig = require('./config/babel')
 const defaultTSConfig = require('./config/tsconfig.json')
 const astConvert = require('./util/ast_convert')
@@ -38,12 +37,12 @@ const entryFileName = path.basename(entryFilePath)
 const outputEntryFilePath = path.join(outputDir, entryFileName)
 
 const pluginsConfig = projectConfig.plugins || {}
-const weappConf = projectConfig.weapp || {}
-const weappNpmConfig = Object.assign({
+const quickappConf = projectConfig.quickapp || {}
+const quickappNpmConfig = Object.assign({
   name: CONFIG.NPM_DIR,
   dir: null
-}, weappConf.npm)
-const appOutput = typeof weappConf.appOutput === 'boolean' ? weappConf.appOutput : true
+}, quickappConf.npm)
+const appOutput = typeof quickappConf.appOutput === 'boolean' ? quickappConf.appOutput : true
 
 const notExistNpmList = []
 const taroJsFramework = '@tarojs/taro'
@@ -94,17 +93,17 @@ const diplayConfigToWeappMap = {
 
 function getExactedNpmFilePath (npmName, filePath) {
   try {
-    const npmInfo = resolveNpmFilesPath(npmName, isProduction, weappNpmConfig)
+    const npmInfo = resolveNpmFilesPath(npmName, isProduction, quickappNpmConfig)
     const npmInfoMainPath = npmInfo.main
     let outputNpmPath
     if (Util.REG_STYLE.test(npmInfoMainPath)) {
       outputNpmPath = npmInfoMainPath
     } else {
-      if (!weappNpmConfig.dir) {
-        outputNpmPath = npmInfoMainPath.replace(NODE_MODULES, path.join(outputDirName, weappNpmConfig.name))
+      if (!quickappNpmConfig.dir) {
+        outputNpmPath = npmInfoMainPath.replace(NODE_MODULES, path.join(outputDirName, quickappNpmConfig.name))
       } else {
         const npmFilePath = npmInfoMainPath.replace(NODE_MODULES_REG, '')
-        outputNpmPath = path.join(path.resolve(configDir, '..', weappNpmConfig.dir), weappNpmConfig.name, npmFilePath)
+        outputNpmPath = path.join(path.resolve(configDir, '..', quickappNpmConfig.dir), quickappNpmConfig.name, npmFilePath)
       }
     }
     const relativePath = path.relative(filePath, outputNpmPath)
@@ -549,7 +548,7 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
                   let vpath = Util.resolveScriptPath(path.resolve(sourceFilePath, '..', value))
                   let outputVpath
                   if (NODE_MODULES_REG.test(vpath)) {
-                    outputVpath = vpath.replace(nodeModulesPath, path.join(outputDir, weappNpmConfig.name))
+                    outputVpath = vpath.replace(nodeModulesPath, path.join(outputDir, quickappNpmConfig.name))
                   } else {
                     outputVpath = vpath.replace(sourceDir, outputDir)
                   }
@@ -667,7 +666,7 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
                     let vpath = Util.resolveScriptPath(path.resolve(sourceFilePath, '..', value))
                     let outputVpath
                     if (NODE_MODULES_REG.test(vpath)) {
-                      outputVpath = vpath.replace(nodeModulesPath, path.join(outputDir, weappNpmConfig.name))
+                      outputVpath = vpath.replace(nodeModulesPath, path.join(outputDir, quickappNpmConfig.name))
                     } else {
                       outputVpath = vpath.replace(sourceDir, outputDir)
                     }
@@ -883,7 +882,7 @@ function copyFilesFromSrcToOutput (files) {
   files.forEach(file => {
     let outputFilePath
     if (NODE_MODULES_REG.test(file)) {
-      outputFilePath = file.replace(nodeModulesPath, path.join(outputDir, weappNpmConfig.name))
+      outputFilePath = file.replace(nodeModulesPath, path.join(outputDir, quickappNpmConfig.name))
     } else {
       outputFilePath = file.replace(sourceDir, outputDir)
     }
@@ -975,7 +974,6 @@ async function buildEntry () {
     })
     // app.js的template忽略
     const res = parseAst(PARSE_AST_TYPE.ENTRY, transformResult.ast, [], entryFilePath, outputEntryFilePath)
-    console.log(res, 'res')
     let resCode = res.code
     resCode = await compileScriptFile(entryFilePath, resCode)
     resCode = Util.replaceContentEnv(resCode, projectConfig.env || {})
@@ -1135,18 +1133,6 @@ async function buildSinglePage (page) {
     resCode = await compileScriptFile(pageJs, resCode)
     resCode = Util.replaceContentEnv(resCode, projectConfig.env || {})
     resCode = Util.replaceContentConstants(resCode, projectConfig.defineConstants || {})
-    if (isProduction) {
-      const uglifyPluginConfig = pluginsConfig.uglify || { enable: true }
-      if (uglifyPluginConfig.enable) {
-        const uglifyConfig = Object.assign(defaultUglifyConfig, uglifyPluginConfig.config || {})
-        const uglifyResult = npmProcess.callPluginSync('uglifyjs', resCode, outputPageJSPath, uglifyConfig)
-        if (uglifyResult.error) {
-          console.log(uglifyResult.error)
-        } else {
-          resCode = uglifyResult.code
-        }
-      }
-    }
     fs.ensureDirSync(outputPagePath)
     const { usingComponents = {} } = res.configObj
     if (usingComponents && !Util.isEmptyObject(usingComponents)) {
@@ -1188,7 +1174,7 @@ async function buildSinglePage (page) {
               if (depComponent.name === component.name) {
                 let componentPath = component.path
                 if (NODE_MODULES_REG.test(componentPath)) {
-                  componentPath = componentPath.replace(NODE_MODULES, weappNpmConfig.name)
+                  componentPath = componentPath.replace(NODE_MODULES, quickappNpmConfig.name)
                 }
                 const realPath = Util.promoteRelativePath(path.relative(pageJs, componentPath))
                 depComponent.path = realPath.replace(path.extname(realPath), '')
@@ -1241,7 +1227,7 @@ async function buildSinglePage (page) {
 }
 
 async function processStyleWithPostCSS (styleObj) {
-  const useModuleConf = weappConf.module || {}
+  const useModuleConf = quickappConf.module || {}
   const customPostcssConf = useModuleConf.postcss || {}
   const customPxtransformConf = customPostcssConf.pxtransform || {}
   const customUrlConf = customPostcssConf.url || {}
@@ -1322,7 +1308,7 @@ function getRealComponentsPathList (filePath, components) {
     let componentPath = component.path
     if (Util.isNpmPkg(componentPath)) {
       try {
-        componentPath = resolveNpmPkgMainPath(componentPath, isProduction, weappNpmConfig)
+        componentPath = resolveNpmPkgMainPath(componentPath, isProduction, quickappNpmConfig)
       } catch (err) {
         console.log(err)
       }
@@ -1394,7 +1380,7 @@ async function buildSingleComponent (componentObj, buildConfig = {}) {
   if (NODE_MODULES_REG.test(componentShowPath)) {
     isComponentFromNodeModules = true
     sourceDirPath = nodeModulesPath
-    buildOutputDir = path.join(outputDir, weappNpmConfig.name)
+    buildOutputDir = path.join(outputDir, quickappNpmConfig.name)
   }
   let outputComponentShowPath = componentShowPath.replace(isComponentFromNodeModules ? NODE_MODULES : sourceDirName, buildConfig.outputDirName || outputDirName)
   outputComponentShowPath = outputComponentShowPath.replace(path.extname(outputComponentShowPath), '')
@@ -1493,7 +1479,7 @@ async function buildSingleComponent (componentObj, buildConfig = {}) {
               if (depComponent.name === componentObj.name) {
                 let componentPath = componentObj.path
                 if (NODE_MODULES_REG.test(componentPath)) {
-                  componentPath = componentPath.replace(NODE_MODULES, weappNpmConfig.name)
+                  componentPath = componentPath.replace(NODE_MODULES, quickappNpmConfig.name)
                 }
                 const realPath = Util.promoteRelativePath(path.relative(component, componentPath))
                 depComponent.path = realPath.replace(path.extname(realPath), '')
@@ -1556,11 +1542,11 @@ function compileDepScripts (scriptFiles) {
     if (path.isAbsolute(item)) {
       let outputItem
       if (NODE_MODULES_REG.test(item)) {
-        outputItem = item.replace(nodeModulesPath, path.join(outputDir, weappNpmConfig.name)).replace(path.extname(item), '.js')
+        outputItem = item.replace(nodeModulesPath, path.join(outputDir, quickappNpmConfig.name)).replace(path.extname(item), '.js')
       } else {
         outputItem = item.replace(path.join(sourceDir), path.join(outputDir)).replace(path.extname(item), '.js')
       }
-      const useCompileConf = Object.assign({}, weappConf.compile)
+      const useCompileConf = Object.assign({}, quickappConf.compile)
       const compileExclude = useCompileConf.exclude || []
       let isInCompileExclude = false
       compileExclude.forEach(excludeItem => {
