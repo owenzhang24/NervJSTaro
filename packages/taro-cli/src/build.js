@@ -8,7 +8,6 @@ const CONFIG = require('./config')
 
 const appPath = process.cwd()
 
-
 function build (args, buildConfig) {
   const { type, watch } = buildConfig
   const configDir = require(path.join(appPath, Util.PROJECT_CONFIG))(_.merge)
@@ -41,6 +40,12 @@ function build (args, buildConfig) {
       break
     case Util.BUILD_TYPES.UI:
       buildForUILibrary({ watch })
+      break
+    case Util.BUILD_TYPES.PLUGIN:
+      buildForPlugin({
+        watch,
+        platform: buildConfig.platform
+      })
       break
     default:
       console.log(chalk.red('输入类型错误，目前只支持 weapp/h5/rn/swan/alipay/tt 六端类型'))
@@ -85,6 +90,10 @@ function buildForRN ({ watch }) {
 
 function buildForUILibrary ({ watch }) {
   require('./ui').build({ watch })
+}
+
+function buildForPlugin ({ watch, platform }) {
+  require('./plugin').build({ watch, platform })
 }
 
 module.exports = build
