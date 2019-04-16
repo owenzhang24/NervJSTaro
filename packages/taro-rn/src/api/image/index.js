@@ -1,0 +1,1 @@
+export { getImageInfo } from './getImageInfo'
