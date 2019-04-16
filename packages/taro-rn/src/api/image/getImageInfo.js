@@ -12,7 +12,7 @@ export function getImageInfo (options = {}) {
   const isObject = shouleBeObject(options)
   if (!isObject.res) {
     const res = {errMsg: `getImageInfo${isObject.msg}`}
-    console.error(res.errMsg)
+    console.log(res.errMsg)
     return Promise.reject(res)
   }
 
