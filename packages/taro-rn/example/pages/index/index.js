@@ -2,6 +2,7 @@ import React from 'react'
 import Taro, { Component } from '@tarojs/taro-rn'
 import { View, Text, StyleSheet, Button } from 'react-native'
 import { getImageInfo, saveImageToPhotosAlbum } from '../../../src/api/image'
+import { getLocation } from '../../../src/api/location'
 
 const {JDLocation, JDPhotoPicker, JDDownload} = require('@jdreact/jdreact-core-lib')
 
@@ -25,11 +26,11 @@ export default class Index extends Component {
 
   getLocation () {
     console.log('getLocation')
-    JDLocation.getCurrentPosition((result) => {
-      console.log('getCurrentPosition success:' + JSON.stringify(result))
-    }, (code, reason) => {
-      console.log('getCurrentPosition error, code' + code + ', reason:' + reason)
-    }, null)
+    getLocation({
+      success: (res) => {
+        console.log(res)
+      }
+    }).then(res => console.log(res))
   }
 
   chooseImage () {
